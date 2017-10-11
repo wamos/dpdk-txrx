@@ -75,6 +75,10 @@ static int
 lcore_recv(__attribute__((unused)) void *arg)
 {
 	unsigned lcore_id = rte_lcore_id();
+	
+	recv_ring = rte_ring_lookup(_PRI_2_SEC);
+       	send_ring = rte_ring_lookup(_SEC_2_PRI);
+       	message_pool = rte_mempool_lookup(_MSG_POOL);
 
 	printf("Starting core %u\n", lcore_id);
 	while (!quit){
@@ -178,6 +182,8 @@ lcore_main(void)
 		rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
 	/* on the current machine, mellanox NIC is on port 0, so we enforce port=0 here*/
 	port=0;
+	uint16_t count=0;
+	struct rte_mempool *m_pool;
 	/* Run until the application is quit or killed. */
 	for (;;) {
 
@@ -185,21 +191,33 @@ lcore_main(void)
 		struct rte_mbuf *bufs[BURST_SIZE];
 		void *msg= NULL;
 		const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
-		
-			
+		count=count+nb_rx;
+		m_pool = rte_mempool_lookup(_MSG_POOL);
+		if(m_pool == NULL) {
+      			printf("Where is my Message pool, pool creation failed\n");
+   		}			
+							
 		if (rte_mempool_get(message_pool, &msg) < 0)
                 	rte_panic("Failed to get message buffer\n");
-		char lo = nb_rx & 0xFF;
- 		char hi = nb_rx >> 8;
-		// we need a char msg[2];
-		char* msgchar=(char *) msg;
-		msgchar = (char *) malloc(sizeof(char)*2);
-		msgchar[0] = lo;
-		msgchar[1] = hi;	
-        	if (rte_ring_enqueue(send_ring, msg) < 0) {
-                	printf("Failed to send message - message discarded\n");
-                	rte_mempool_put(message_pool, msg);
+
+		if(nb_rx>0){
+			char lo = count & 0xFF;
+ 			char hi = count >> 8;
+			// we need a char msg[2];
+			char* msgchars;
+			msgchars = (char *) malloc(sizeof(char)*2);
+			msgchars[0] = lo;
+			msgchars[1] = hi;
+		
+			snprintf((char *)msg, string_size, "%s", msgchars );
+			printf("%s\n", (char *) msg);
+			printf("rte: %d\n", rte_ring_enqueue(send_ring, msg));
+        		if (rte_ring_enqueue(send_ring, msg) < 0) {
+                		printf("Failed to send message - message discarded\n");
+                		rte_mempool_put(message_pool, msg);
+			}
         	}
+		
 		/*if (fp != NULL){
  			//fprintf(fp, "Port number %d \n", port);
 			for(int i=0;i < nb_rx;i++)
@@ -259,7 +277,13 @@ main(int argc, char *argv[])
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
-	/*multi-process*/
+	/*multi-thread*/
+	send_ring = rte_ring_create(_PRI_2_SEC, ring_size, rte_socket_id(), flags);
+        recv_ring = rte_ring_create(_SEC_2_PRI, ring_size, rte_socket_id(), flags);
+        message_pool = rte_mempool_create(_MSG_POOL, pool_size,
+       				string_size, pool_cache, priv_data_sz,
+                        	NULL, NULL, NULL, NULL,rte_socket_id(), flags);
+	/*	
         if (rte_eal_process_type() == RTE_PROC_PRIMARY){
                 send_ring = rte_ring_create(_PRI_2_SEC, ring_size, rte_socket_id(), flags);
                 recv_ring = rte_ring_create(_SEC_2_PRI, ring_size, rte_socket_id(), flags);
@@ -278,19 +302,19 @@ main(int argc, char *argv[])
                 rte_exit(EXIT_FAILURE, "Problem getting receiving ring\n");
         if (message_pool == NULL)
                 rte_exit(EXIT_FAILURE, "Problem getting message pool\n");
-
+	
         //RTE_LOG(INFO, APP, "Finished Process Init.\n");
-
-        /* call lcore_recv() on every slave lcore */
+	*/
+        //call lcore_recv() on every slave lcore
         RTE_LCORE_FOREACH_SLAVE(lcore_id) {
                 rte_eal_remote_launch(lcore_recv, NULL, lcore_id);
         }
-
+	
 
 	/* Call lcore_main on the master core only. */
 	lcore_main();
 
-	rte_eal_mp_wait_lcore();
+	//rte_eal_mp_wait_lcore();
 
 	return 0;
 }

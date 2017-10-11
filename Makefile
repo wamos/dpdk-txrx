@@ -42,7 +42,10 @@ include $(RTE_SDK)/mk/rte.vars.mk
 APP = receiver
 
 # all source are stored in SRCS-y
+#SRCS-y := basicfwd.c
+
 SRCS-y := receiver.c
+
 
 CFLAGS += $(WERROR_FLAGS)
 
