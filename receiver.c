@@ -81,6 +81,8 @@ lcore_recv(__attribute__((unused)) void *arg)
        	message_pool = rte_mempool_lookup(_MSG_POOL);
 
 	printf("Starting core %u\n", lcore_id);
+	printf("quit flag %d", quit);
+	//#TODO: while loop is not entered?
 	while (!quit){
 		void *msg;
 		if (rte_ring_dequeue(recv_ring, &msg) < 0){
@@ -90,6 +92,7 @@ lcore_recv(__attribute__((unused)) void *arg)
 		printf("core %u: Received '%s'\n", lcore_id, (char *)msg);
 		rte_mempool_put(message_pool, msg);
 	}
+	printf("after while");
 
 	return 0;
 }
@@ -189,29 +192,37 @@ lcore_main(void)
 
 		/* Get burst of RX packets */
 		struct rte_mbuf *bufs[BURST_SIZE];
-		void *msg= NULL;
+		void *msg; //=NULL?, then ret_mempool_get fails
 		const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 		count=count+nb_rx;
 		m_pool = rte_mempool_lookup(_MSG_POOL);
 		if(m_pool == NULL) {
       			printf("Where is my Message pool, pool creation failed\n");
-   		}			
-							
-		if (rte_mempool_get(message_pool, &msg) < 0)
-                	rte_panic("Failed to get message buffer\n");
+   		}
+					
+		//rte_mempool:
+		//Note that it can return -ENOENT when the local cache and common pool are empty, even if cache from other lcores are full.					
+		//if (rte_mempool_get(message_pool, &msg) < 0)
+                //	rte_panic("Failed to get message buffer\n");
 
 		if(nb_rx>0){
-			char lo = count & 0xFF;
+			//TODO: fix the char printing issues 
+			char lo = (char) count & 0xFF;
  			char hi = count >> 8;
+			printf("low:%s",lo);
 			// we need a char msg[2];
 			char* msgchars;
 			msgchars = (char *) malloc(sizeof(char)*2);
 			msgchars[0] = lo;
 			msgchars[1] = hi;
-		
+			
+			if (rte_mempool_get(message_pool, &msg) < 0)
+                        	rte_panic("Failed to get message buffer\n");	
+
 			snprintf((char *)msg, string_size, "%s", msgchars );
-			printf("%s\n", (char *) msg);
-			printf("rte: %d\n", rte_ring_enqueue(send_ring, msg));
+			//printf("%s\n", msgchars);
+			printf("packet #%" PRIu16 ":%s",count, (char *) msg);
+			//printf("rte: %d\n", rte_ring_enqueue(send_ring, msg));
         		if (rte_ring_enqueue(send_ring, msg) < 0) {
                 		printf("Failed to send message - message discarded\n");
                 		rte_mempool_put(message_pool, msg);
@@ -274,8 +285,8 @@ main(int argc, char *argv[])
 			rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n",
 					portid);
 
-	if (rte_lcore_count() > 1)
-		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+	//if (rte_lcore_count() > 1)
+	//	printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
 	/*multi-thread*/
 	send_ring = rte_ring_create(_PRI_2_SEC, ring_size, rte_socket_id(), flags);

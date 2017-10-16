@@ -51,26 +51,6 @@ static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
 
-static int
-lcore_recv(__attribute__((unused)) void *arg)
-{
-	unsigned lcore_id = rte_lcore_id();
-
-	printf("Starting core %u\n", lcore_id);
-	while (!quit){
-		void *msg;
-		if (rte_ring_dequeue(recv_ring, &msg) < 0){
-			usleep(5);
-			continue;
-		}
-		printf("core %u: Received '%s'\n", lcore_id, (char *)msg);
-		rte_mempool_put(message_pool, msg);
-	}
-
-	return 0;
-}
-
-/* basicfwd.c: Basic DPDK skeleton forwarding example. */
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -160,24 +140,31 @@ lcore_main(void)
 	port=0;
 	FILE *fp;
 	fp = fopen("/tmp/dump.txt", "w");
+	uint16_t count=0;
 	/* Run until the application is quit or killed. */
 	for (;;) {
 
 		/* Get burst of RX packets */
 		struct rte_mbuf *bufs[BURST_SIZE];
-		//const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
-		const uint16_t nb_tx = rte_eth_tx_burst(port, 0, bufs, NUM_MBUFS);
-		
-		/*
-		if (fp != NULL){
+		/*const uint16_t*/
+		/* pull mode devices, so most the time nb_rx can be 0 */ 
+		uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+		count=nb_rx+count;
+		if(nb_rx>0)
+			printf("%" PRIu16 "\n", count);
+		//printf("nb_rx: %d\n", nb_rx);
+		/*if (fp != NULL){
  			//fprintf(fp, "Port number %d \n", port);
-			for(int i=0;i < nb_rx;i++)
+			for(int i=0;i < nb_rx;i++){
  				rte_pktmbuf_dump(fp, bufs[i], sizeof(bufs[i]));
+				count++;
+			}
+			printf("%" PRIu16 "\n",count);
 		}*/
-		if (unlikely(nb_tx == 0)){
-			printf("\nWARNING: no packet is trasmitted\n");	
-			continue;
-		}
+		//if (unlikely(nb_rx == 0))
+		//	continue;
+		/*for(int i=0;i< nb_rx;i++)
+			rte_pktmbuf_free(bufs[i]);*/
 	}
 	fclose(fp);
 }
