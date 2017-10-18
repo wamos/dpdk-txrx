@@ -46,46 +46,10 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
-#define PAYLOAD_LEN 64
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
-
-/*
-static inline void
-copy_buf_to_pkt(void* buf, unsigned len, struct rte_mbuf *pkt, unsigned offset)
-{
-	rte_memcpy(rte_pktmbuf_mtod_offset(pkt, char *, offset),
-		buf, (size_t) len);
-}
-*/
-
-static struct rte_mbuf * alloc_pkt(struct rte_mempool *mbuf_pool)
-{
-	uint8_t payload[PAYLOAD_LEN]; // 64 bytes now
-	struct rte_mbuf *pkt;
-
-	for (int i = 0; i < PAYLOAD_LEN; i++) {
-		payload[i] = (uint8_t) i;
-	}
-
-	pkt = rte_pktmbuf_alloc(mbuf_pool);
-	if (pkt == NULL) {
-		rte_panic("Failed to allocate pkt fails\n");
-	}
-	
-	rte_memcpy(rte_pktmbuf_mtod_offset(pkt, char *, 0), payload, (size_t) sizeof(payload) );
-	//copy_buf_to_pkt(payload, sizeof(payload), pkt, 0);
-
-	if(rte_pktmbuf_append(pkt, (uint16_t) PAYLOAD_LEN) == NULL){
-		rte_panic("Failed to append to mbuf\n");
-        rte_pktmbuf_free(pkt);
-        return NULL;
-	}
-
-	return pkt;
-}
 
 
 /*
@@ -150,7 +114,7 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
  * an input port and writing to an output port.
  */
 static __attribute__((noreturn)) void
-lcore_main(uint8_t tx_port, struct rte_mempool *mbuf_pool)
+lcore_main(void)
 {
 	const uint8_t nb_ports = rte_eth_dev_count();
 	uint8_t port;
@@ -172,36 +136,37 @@ lcore_main(uint8_t tx_port, struct rte_mempool *mbuf_pool)
 	
 	if (nb_ports != 1)
 		rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
-
-
-	uint16_t send_count=0;
+	/* on the current machine, mellanox NIC is on port 0, so we enforce the port=0 here*/
+	port=0;
+	FILE *fp;
+	fp = fopen("/tmp/dump.txt", "w");
+	uint16_t count=0;
 	/* Run until the application is quit or killed. */
 	for (;;) {
 
 		/* Get burst of RX packets */
 		struct rte_mbuf *bufs[BURST_SIZE];
-		
-		for (int i = 0; i < BURST_SIZE; i++) {
-			bufs[i] = alloc_pkt(mbuf_pool);
-			if(bufs[i] == NULL){
-				rte_exit(EXIT_FAILURE, "allocating pkt fails\n");
-				return;
-			}
-		}
+		/*const uint16_t*/
 		/* pull mode devices, so most the time nb_rx can be 0 */ 
-		const uint16_t nb_tx = rte_eth_tx_burst(tx_port, 0, bufs, BURST_SIZE);
-		send_count +=nb_tx;
-		if(nb_tx>0)
-			printf("%" PRIu16 "\n", send_count);
-		/* Free any unsent packets. */
-        if (unlikely(nb_tx < BURST_SIZE)) {
-        	uint16_t buf_num;
-            for (buf_num = nb_tx; buf_num < BURST_SIZE; buf_num++)
-                rte_pktmbuf_free(bufs[buf_num]);
-        }
-    }
-
-
+		uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+		count=nb_rx+count;
+		if(nb_rx>0)
+			printf("%" PRIu16 "\n", count);
+		//printf("nb_rx: %d\n", nb_rx);
+		/*if (fp != NULL){
+ 			//fprintf(fp, "Port number %d \n", port);
+			for(int i=0;i < nb_rx;i++){
+ 				rte_pktmbuf_dump(fp, bufs[i], sizeof(bufs[i]));
+				count++;
+			}
+			printf("%" PRIu16 "\n",count);
+		}*/
+		//if (unlikely(nb_rx == 0))
+		//	continue;
+		/*for(int i=0;i< nb_rx;i++)
+			rte_pktmbuf_free(bufs[i]);*/
+	}
+	fclose(fp);
 }
 
 /*
@@ -226,8 +191,8 @@ main(int argc, char *argv[])
 	/* Check that there is an even number of ports to send/receive on. */
 	nb_ports = rte_eth_dev_count();
 	printf("\nNnumber of Ports: %d\n", nb_ports);
-	//if (nb_ports != 1)
-	//	rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
+	if (nb_ports != 1)
+		rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
 
 	/* Creates a new mempool in memory to hold the mbufs. */
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
@@ -243,12 +208,10 @@ main(int argc, char *argv[])
 					portid);
 
 	if (rte_lcore_count() > 1)
-		printf("\nWARNING: more than 1 cores enabled.\n");
+		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
-	/* on the current machine, mellanox NIC is on port 0, so we enforce the port=0 here*/
-	portid=0;
 	/* Call lcore_main on the master core only. */
-	lcore_main(portid,mbuf_pool);
+	lcore_main();
 
 	return 0;
 }
