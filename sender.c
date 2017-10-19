@@ -39,6 +39,7 @@
 #include <rte_cycles.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
+#include <time.h>
 
 #define RX_RING_SIZE 128
 #define TX_RING_SIZE 512
@@ -52,16 +53,43 @@ static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
 
-/*
-static inline void
-copy_buf_to_pkt(void* buf, unsigned len, struct rte_mbuf *pkt, unsigned offset)
+static uint64_t
+get_ns_time(void)
 {
-	rte_memcpy(rte_pktmbuf_mtod_offset(pkt, char *, offset),
-		buf, (size_t) len);
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (uint64_t) ts.tv_nsec;	
 }
-*/
 
-static struct rte_mbuf * alloc_pkt(struct rte_mempool *mbuf_pool)
+
+static void 
+print_eth_stats(uint8_t portid, uint64_t timediff, uint64_t send_count)
+{
+	struct rte_eth_stats stats;
+
+	if (rte_eth_stats_get(portid, &stats)) {
+		rte_exit(EXIT_FAILURE, "Couldn't get stats for port %d\n", portid);
+	}
+
+	//printf("TX port %"PRIu8 ":\n", portid);
+	printf("time diff: %"PRIu64 "ns \n", timediff);
+	printf("stats ipackets %"PRIu64 "\n", stats.ipackets);
+	printf("stats opackets %"PRIu64 "\n", stats.opackets);
+	printf("stats ibytes %"PRIu64 "\n", stats.ibytes);
+	printf("stats obytes %"PRIu64 "\n", stats.obytes);
+	printf("count opackets %"PRIu64 "\n", send_count);
+	printf("count obytes %"PRIu64 "\n", send_count*64);
+	double timediff_in_second = (double) timediff/ (double) 1000000000;
+	double stats_thru = (double) stats.obytes/ timediff_in_second;
+	double count_thru = send_count*64/timediff_in_second;
+	printf("throughput on stats: %f \n", stats_thru);
+	printf("throughput on counts: %f \n", count_thru);
+
+}
+
+
+static struct rte_mbuf * 
+alloc_pkt(struct rte_mempool *mbuf_pool)
 {
 	uint8_t payload[PAYLOAD_LEN]; // 64 bytes now
 	struct rte_mbuf *pkt;
@@ -76,7 +104,6 @@ static struct rte_mbuf * alloc_pkt(struct rte_mempool *mbuf_pool)
 	}
 	
 	rte_memcpy(rte_pktmbuf_mtod_offset(pkt, char *, 0), payload, (size_t) sizeof(payload) );
-	//copy_buf_to_pkt(payload, sizeof(payload), pkt, 0);
 
 	if(rte_pktmbuf_append(pkt, (uint16_t) PAYLOAD_LEN) == NULL){
 		rte_panic("Failed to append to mbuf\n");
@@ -155,10 +182,8 @@ lcore_main(uint8_t tx_port, struct rte_mempool *mbuf_pool)
 	const uint8_t nb_ports = rte_eth_dev_count();
 	uint8_t port;
 
-	/*
-	 * Check that the port is on the same NUMA node as the polling thread
-	 * for best performance.
-	 */
+	 /*Check that the port is on the same NUMA node as the polling thread
+	 * for best performance*/
 	for (port = 0; port < nb_ports; port++)
 		if (rte_eth_dev_socket_id(port) > 0 &&
 				rte_eth_dev_socket_id(port) !=
@@ -174,10 +199,11 @@ lcore_main(uint8_t tx_port, struct rte_mempool *mbuf_pool)
 		rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
 
 
-	uint16_t send_count=0;
+	uint64_t send_count=0;
+	uint64_t start_time=get_ns_time();
 	/* Run until the application is quit or killed. */
-	for (;;) {
-
+	//for (;;) {
+	for(int j = 0; j < 65536; j++){
 		/* Get burst of RX packets */
 		struct rte_mbuf *bufs[BURST_SIZE];
 		
@@ -185,23 +211,23 @@ lcore_main(uint8_t tx_port, struct rte_mempool *mbuf_pool)
 			bufs[i] = alloc_pkt(mbuf_pool);
 			if(bufs[i] == NULL){
 				rte_exit(EXIT_FAILURE, "allocating pkt fails\n");
-				return;
 			}
 		}
 		/* pull mode devices, so most the time nb_rx can be 0 */ 
 		const uint16_t nb_tx = rte_eth_tx_burst(tx_port, 0, bufs, BURST_SIZE);
-		send_count +=nb_tx;
-		if(nb_tx>0)
-			printf("%" PRIu16 "\n", send_count);
-		/* Free any unsent packets. */
-        if (unlikely(nb_tx < BURST_SIZE)) {
-        	uint16_t buf_num;
-            for (buf_num = nb_tx; buf_num < BURST_SIZE; buf_num++)
-                rte_pktmbuf_free(bufs[buf_num]);
-        }
-    }
-
-
+		send_count +=(uint64_t)nb_tx;
+		if(nb_tx>0 && send_count%32 == 0)
+			printf("Burst# %" PRIu64 "\n", send_count/32);
+		if (unlikely(nb_tx < BURST_SIZE)) {
+                	uint16_t buf_num;
+                	for (buf_num = nb_tx; buf_num < BURST_SIZE; buf_num++)
+                		 rte_pktmbuf_free(bufs[buf_num]);
+            	}
+	}
+	
+	uint64_t end_time=get_ns_time();
+	print_eth_stats(tx_port, end_time-start_time, send_count);
+    
 }
 
 /*

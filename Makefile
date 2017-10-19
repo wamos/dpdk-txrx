@@ -39,12 +39,13 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 # binary name
-APP = receiver
-
+#APP = basicfwd
+APP= receiver
+#APP = sender
 # all source are stored in SRCS-y
 #SRCS-y := basicfwd.c
-
-SRCS-y := receiver.c
+#SRCS-y := sender.c
+SRCS-y := basic_receiver.c
 
 
 CFLAGS += $(WERROR_FLAGS)

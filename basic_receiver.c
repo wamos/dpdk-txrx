@@ -1,4 +1,4 @@
-/*
+/*-
  *   BSD LICENSE
  *
  *   Copyright(c) 2010-2015 Intel Corporation. All rights reserved.
@@ -39,17 +39,6 @@
 #include <rte_cycles.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
-#include <rte_common.h>
-#include <rte_memory.h>
-#include <rte_memzone.h>
-#include <rte_launch.h>
-#include <rte_per_lcore.h>
-#include <rte_debug.h>
-#include <rte_atomic.h>
-#include <rte_branch_prediction.h>
-#include <rte_ring.h>
-#include <rte_log.h>
-#include <rte_mempool.h>
 
 #define RX_RING_SIZE 128
 #define TX_RING_SIZE 512
@@ -58,46 +47,43 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
 
-static const char *_MSG_POOL = "MSG_POOL";
-static const char *_SEC_2_PRI = "SEC_2_PRI";
-static const char *_PRI_2_SEC = "PRI_2_SEC";
-const unsigned string_size = 64;
-
-struct rte_ring *send_ring, *recv_ring;
-struct rte_mempool *message_pool;
-volatile int quit = 0;
-
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
 
-static int
-lcore_recv(__attribute__((unused)) void *arg)
+static uint64_t
+get_ns_time(void)
 {
-	unsigned lcore_id = rte_lcore_id();
-	
-	recv_ring = rte_ring_lookup(_PRI_2_SEC);
-       	send_ring = rte_ring_lookup(_SEC_2_PRI);
-       	message_pool = rte_mempool_lookup(_MSG_POOL);
-
-	printf("Starting core %u\n", lcore_id);
-	printf("quit flag %d", quit);
-	//#TODO: while loop is not entered?
-	while (!quit){
-		void *msg;
-		if (rte_ring_dequeue(recv_ring, &msg) < 0){
-			//usleep(5);
-			continue;
-		}
-		printf("core %u: Received '%s'\n", lcore_id, (char *)msg);
-		rte_mempool_put(message_pool, msg);
-	}
-	printf("after while");
-
-	return 0;
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (uint64_t) ts.tv_nsec;	
 }
 
-/* basicfwd.c: Basic DPDK skeleton forwarding example. */
+
+static void 
+print_eth_stats(uint8_t portid, uint64_t timediff, uint64_t rx_count)
+{
+	struct rte_eth_stats stats;
+
+	if (rte_eth_stats_get(portid, &stats)) {
+		rte_exit(EXIT_FAILURE, "Couldn't get stats for port %d\n", portid);
+	}
+
+	//printf("TX port %"PRIu8 ":\n", portid);
+	printf("time diff: %"PRIu64 "ns \n", timediff);
+	printf("stats ipackets %"PRIu64 "\n", stats.ipackets);
+	printf("stats opackets %"PRIu64 "\n", stats.opackets);
+	printf("stats ibytes %"PRIu64 "\n", stats.ibytes);
+	printf("stats obytes %"PRIu64 "\n", stats.obytes);
+	printf("count opackets %"PRIu64 "\n", rx_count);
+	printf("count obytes %"PRIu64 "\n", rx_count*64);
+	double timediff_in_second = (double) timediff/ (double) 1000000000;
+	double stats_thru = (double) stats.ibytes/ timediff_in_second;
+	double count_thru = rx_count*64/timediff_in_second;
+	printf("throughput on stats: %f \n", stats_thru);
+	printf("throughput on counts: %f \n", count_thru);
+
+}
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -183,62 +169,56 @@ lcore_main(void)
 	
 	if (nb_ports != 1)
 		rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
-	/* on the current machine, mellanox NIC is on port 0, so we enforce port=0 here*/
+	/* on the current machine, mellanox NIC is on port 0, so we enforce the port=0 here*/
 	port=0;
-	uint16_t count=0;
-	struct rte_mempool *m_pool;
+	//FILE *fp;
+	//fp = fopen("/tmp/dump.txt", "w");
+
+	
+	uint64_t rx_count=0;
+	uint64_t counter=0;
+	uint8_t flag=0;
+	uint64_t start_time=0;
 	/* Run until the application is quit or killed. */
 	for (;;) {
-
+	//for(int j = 0; j < 65536; j++){	
 		/* Get burst of RX packets */
 		struct rte_mbuf *bufs[BURST_SIZE];
-		void *msg; //=NULL?, then ret_mempool_get fails
-		const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
-		count=count+nb_rx;
-		m_pool = rte_mempool_lookup(_MSG_POOL);
-		if(m_pool == NULL) {
-      			printf("Where is my Message pool, pool creation failed\n");
-   		}
-					
-		//rte_mempool:
-		//Note that it can return -ENOENT when the local cache and common pool are empty, even if cache from other lcores are full.					
-		//if (rte_mempool_get(message_pool, &msg) < 0)
-                //	rte_panic("Failed to get message buffer\n");
-
-		if(nb_rx>0){
-			//TODO: fix the char printing issues 
-			char lo = (char) count & 0xFF;
- 			char hi = count >> 8;
-			//printf("low:%s",lo);
-			// we need a char msg[2];
-			char* msgchars;
-			msgchars = (char *) malloc(sizeof(char)*2);
-			msgchars[0] = lo;
-			msgchars[1] = hi;
-			
-			if (rte_mempool_get(message_pool, &msg) < 0)
-                        	rte_panic("Failed to get message buffer\n");	
-
-			snprintf((char *)msg, string_size, "%s", msgchars );
-			//printf("%s\n", msgchars);
-			printf("packet #%" PRIu16 ":%s",count, (char *) msg);
-			//printf("rte: %d\n", rte_ring_enqueue(send_ring, msg));
-        		if (rte_ring_enqueue(send_ring, msg) < 0) {
-                		printf("Failed to send message - message discarded\n");
-                		rte_mempool_put(message_pool, msg);
-			}
-        	}
-		
+		/* pull mode devices, so most the time nb_rx can be 0 */ 
+		uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+		rx_count +=(uint64_t)nb_rx;
+		if(nb_rx>0 && flag==0){
+			//printf("%" PRIu64 "\n", rx_count);
+			start_time=get_ns_time();
+			printf("timer starts!\n");
+			flag=1;
+		}
+		/*else //if(nb_rx>0 && flag==1)
+			printf("%" PRIu64 "\n", rx_count);
+		*/
+		// 2^24	
+		if(counter!= 0 && counter%16777216 == 0 && flag == 1){
+			uint64_t end_time=get_ns_time();
+			print_eth_stats(port, end_time-start_time, rx_count);
+		}
+		counter++;
 		/*if (fp != NULL){
  			//fprintf(fp, "Port number %d \n", port);
-			for(int i=0;i < nb_rx;i++)
+			for(int i=0;i < nb_rx;i++){
  				rte_pktmbuf_dump(fp, bufs[i], sizeof(bufs[i]));
+				count++;
+			}
+			printf("%" PRIu16 "\n",count);
 		}
-		//if (unlikely(nb_rx == 0))
-		//	continue;*/
+		if (unlikely(nb_rx == 0))
+			continue;
+		*/
 		for(int i=0;i< nb_rx;i++)
 			rte_pktmbuf_free(bufs[i]);
 	}
+	
+	
+	//fclose(fp);
 }
 
 /*
@@ -251,12 +231,6 @@ main(int argc, char *argv[])
 	struct rte_mempool *mbuf_pool;
 	unsigned nb_ports;
 	uint8_t portid;
-	const unsigned flags = 0;
-	const unsigned ring_size = 64;
-	const unsigned pool_size = 1024;
-	const unsigned pool_cache = 32;
-	const unsigned priv_data_sz = 0;
-	unsigned lcore_id;
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(argc, argv);
@@ -273,7 +247,7 @@ main(int argc, char *argv[])
 		rte_exit(EXIT_FAILURE, "ST: Now there must be only a port\n");
 
 	/* Creates a new mempool in memory to hold the mbufs. */
-	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
+	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * 64,
 		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
 	if (mbuf_pool == NULL)
@@ -285,47 +259,11 @@ main(int argc, char *argv[])
 			rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n",
 					portid);
 
-	//if (rte_lcore_count() > 1)
-	//	printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
-
-	/*multi-thread*/
-	send_ring = rte_ring_create(_PRI_2_SEC, ring_size, rte_socket_id(), flags);
-        recv_ring = rte_ring_create(_SEC_2_PRI, ring_size, rte_socket_id(), flags);
-        message_pool = rte_mempool_create(_MSG_POOL, pool_size,
-       				string_size, pool_cache, priv_data_sz,
-                        	NULL, NULL, NULL, NULL,rte_socket_id(), flags);
-	/*	
-        if (rte_eal_process_type() == RTE_PROC_PRIMARY){
-                send_ring = rte_ring_create(_PRI_2_SEC, ring_size, rte_socket_id(), flags);
-                recv_ring = rte_ring_create(_SEC_2_PRI, ring_size, rte_socket_id(), flags);
-                message_pool = rte_mempool_create(_MSG_POOL, pool_size,
-                                string_size, pool_cache, priv_data_sz,
-                                NULL, NULL, NULL, NULL,
-                                rte_socket_id(), flags);
-        } else {
-                recv_ring = rte_ring_lookup(_PRI_2_SEC);
-                send_ring = rte_ring_lookup(_SEC_2_PRI);
-                message_pool = rte_mempool_lookup(_MSG_POOL);
-        }
-        if (send_ring == NULL)
-                rte_exit(EXIT_FAILURE, "Problem getting sending ring\n");
-        if (recv_ring == NULL)
-                rte_exit(EXIT_FAILURE, "Problem getting receiving ring\n");
-        if (message_pool == NULL)
-                rte_exit(EXIT_FAILURE, "Problem getting message pool\n");
-	
-        //RTE_LOG(INFO, APP, "Finished Process Init.\n");
-	*/
-        //call lcore_recv() on every slave lcore
-        RTE_LCORE_FOREACH_SLAVE(lcore_id) {
-                rte_eal_remote_launch(lcore_recv, NULL, lcore_id);
-        }
-	
+	if (rte_lcore_count() > 1)
+		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
 	/* Call lcore_main on the master core only. */
 	lcore_main();
-
-	//rte_eal_mp_wait_lcore();
 
 	return 0;
 }
